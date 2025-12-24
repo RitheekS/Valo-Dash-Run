@@ -14,7 +14,6 @@ export class Player {
   }
 }
 
-
 export function drawPlayer(
   ctx: CanvasRenderingContext2D,
   canvasWidth: number,
@@ -24,7 +23,7 @@ export function drawPlayer(
 ) {
   const laneWidth = canvasWidth / lanes;
   const x = lane * laneWidth + laneWidth / 2 - 20;
-  const y = canvasHeight - 120;
+  const y = canvasHeight - 100;
 
   ctx.fillStyle = "#3fa9f5";
   ctx.fillRect(x, y, 40, 80);

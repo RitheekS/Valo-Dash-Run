@@ -8,10 +8,11 @@ export function drawLanes(
     const laneWidth = width / LANES;
 
     ctx.fillStyle = "#050505";
+    ctx.strokeStyle = "#b026ff";
+    ctx.lineWidth = 3;
+    ctx.shadowColor = "#b026ff";
+    ctx.shadowBlur = 15;
     ctx.fillRect(0,0,width,height);
-
-    ctx.strokeStyle = "#444";
-    ctx.lineWidth = 2;
 
     for (let i = 1; i < LANES; i++) {
         ctx.beginPath();

@@ -3,367 +3,439 @@ import { drawPlayer } from "./player";
 import { Player } from "./player";
 import { Obstacle } from "./Obstacle";
 import { Collectible } from "./collectibles";
+import conn from "../db/supabase-config";
 
+/* ==================== SETUP ==================== */
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
-
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 
-// ==================== GAME STATE ====================
+/* ==================== CONSTANTS ==================== */
 const LANES = 4;
-const player = new Player(LANES);
+const PHASE_2_SCORE = 10000;
 
-const obstacles: Obstacle[] = [];
-const collectibles: Collectible[] = [];
 const TAP_THRESHOLD = 0.25;
 const MAX_CHARGE = 0.6;
 const ATTACK_COOLDOWN = 0.4;
+
+/* ==================== STATE ==================== */
+const player = new Player(LANES);
+const obstacles: Obstacle[] = [];
+const collectibles: Collectible[] = [];
+const pulse = 0.3 + Math.sin(performance.now() / 120) * 0.15;
 
 let lastTime = 0;
 let speed = 300;
 let score = 0;
 let alive = true;
-let attackCooldown = 0;
+
+/* Shock Bolt */
 let isCharging = false;
 let chargeTime = 0;
+let attackCooldown = 0;
 let phoenixHitTimer = 0;
 
-// Phase system
+/* Phoenix Blind */
+let blindTimer = 0;
+let blindCooldown = 0;
+
+/* Screen Shake */
+let shakeTimer = 0;
+
+/* Phase */
 enum GamePhase {
   RUNNER,
-  CHASE,
+  CHASE
 }
-let currentPhase = GamePhase.RUNNER;
+let phase = GamePhase.RUNNER;
 
-// Spawning
-let obstacleSpawnInterval = 1;
-let obstacleSpawnTimer = 0;
+/* Spawning */
+let obstacleTimer = 0;
+let obstacleInterval = 1;
 let collectibleTimer = 0;
 
-// Chase mechanics
-let attackTimer = 0;
+/* Leaderboard */
+let scoreSubmitted = false;
+let leaderboardData: { score: number }[] | null = null;
+
+/* Lane Attacks */
 let warningLanes: number[] = [];
 let dangerLanes: number[] = [];
-let laneAttackState: "WARNING" | "DANGER" = "WARNING";
+let attackTimer = 0;
+let attackState: "WARNING" | "DANGER" = "WARNING";
 
-// Phoenix placeholder
-const phoenix = {
-  lane: 1,
-  yOffset: 340,
+/* Score PopUp */
+type ScorePopUp = {
+    x: number;
+    y: number;
+    value: number;
+    life: number;
 };
+const scorePopUps: ScorePopUp[] = [];
 
-// ==================== HELPERS ====================
-function laneWidth() {
-  return canvas.width / LANES;
-}
+/* Phoenix */
+const phoenix = { lane: 1, offsetY: 340 };
 
-function rectsCollide(a: any, b: any) {
-  return (
-    a.x < b.x + b.width &&
-    a.x + a.width > b.x &&
-    a.y < b.y + b.height &&
-    a.y + a.height > b.y
-  );
-}
+/* ==================== HELPERS ==================== */
+const laneWidth = () => canvas.width / LANES;
 
-// ==================== PHASE 1 ====================
+const rectsCollide = (a: any, b: any) =>
+  a.x < b.x + b.width &&
+  a.x + a.width > b.x &&
+  a.y < b.y + b.height &&
+  a.y + a.height > b.y;
+
+/* ==================== PHASE 1 ==================== */
 function spawnObstacle() {
-  const lane = Math.floor(Math.random() * LANES);
-  obstacles.push(new Obstacle(lane, speed));
+  obstacles.push(new Obstacle(Math.floor(Math.random() * LANES), speed));
 }
 
 function spawnCollectible() {
-  const validLanes: number[] = [];
-
-  for (let i = 0; i < LANES; i++) {
-    if (!isLaneBlocked(i)) validLanes.push(i);
-  }
-
-  if (validLanes.length === 0) return;
-
-  const lane =
-    validLanes[Math.floor(Math.random() * validLanes.length)];
-  collectibles.push(new Collectible(lane, speed));
+  const valid = [...Array(LANES).keys()].filter(
+    lane => !obstacles.some(o => o.lane === lane && o.y < canvas.height * 0.6)
+  );
+  if (valid.length)
+    collectibles.push(new Collectible(valid[Math.floor(Math.random() * valid.length)], speed));
 }
 
-function updateObstacles(delta: number) {
+function updateObstacles(dt: number) {
   for (let i = obstacles.length - 1; i >= 0; i--) {
-    obstacles[i].update(delta);
+    obstacles[i].update(dt);
     if (obstacles[i].y > canvas.height) obstacles.splice(i, 1);
   }
 }
 
-function updateCollectibles(delta: number) {
+function updateCollectibles(dt: number) {
   for (let i = collectibles.length - 1; i >= 0; i--) {
-    collectibles[i].update(delta);
+    collectibles[i].update(dt);
     if (collectibles[i].y > canvas.height) collectibles.splice(i, 1);
   }
 }
 
-function isLaneBlocked(lane: number): boolean {
-  return obstacles.some(
-    (obs) =>
-      obs.lane === lane &&
-      obs.y > -obs.height &&
-      obs.y < canvas.height * 0.6
-  );
-}
+/* ==================== PHASE 2 ==================== */
+function updateLaneAttacks(dt: number) {
+  attackTimer += dt;
 
-// ==================== PHASE 2 ====================
-function updateLaneAttack(delta: number) {
-  attackTimer += delta;
-
-  if (laneAttackState === "WARNING" && attackTimer > 0.6) {
+  if (attackState === "WARNING" && attackTimer > 0.6) {
     dangerLanes = [...warningLanes];
     warningLanes = [];
-    laneAttackState = "DANGER";
+    attackState = "DANGER";
     attackTimer = 0;
+    shakeTimer = 0.15;
+    ctx.fillStyle = `rgba(244, 140, 0, ${pulse})`;
   }
 
-  if (laneAttackState === "DANGER" && attackTimer > 0.4) {
-    warningLanes = [];
+  if (attackState === "DANGER" && attackTimer > 0.4) {
     dangerLanes = [];
-    laneAttackState = "WARNING";
+    attackState = "WARNING";
     attackTimer = 0;
-
-    const count = Math.random() > 0.6 ? 2 : 1;
-    while (warningLanes.length < count) {
-      const lane = Math.floor(Math.random() * LANES);
-      if (!warningLanes.includes(lane)) warningLanes.push(lane);
+    
+    while (warningLanes.length < (Math.random() > 0.6 ? 2 : 1)) {
+      const l = Math.floor(Math.random() * LANES);
+      if (!warningLanes.includes(l)) warningLanes.push(l);
     }
   }
 }
 
-// ==================== COLLISIONS ====================
+/* ==================== COMBAT ==================== */
+function fireShockBolt(charge: number) {
+  score += charge >= TAP_THRESHOLD ? 800 : 300;
+  phoenixHitTimer = charge >= TAP_THRESHOLD ? 0.25 : 0.15;
+}
+
+/* ==================== COLLISIONS ==================== */
 function checkCollisions() {
   const w = laneWidth();
-
   const playerBox = {
     x: player.lane * w + w / 2 - 20,
     y: canvas.height - 120,
     width: 40,
-    height: 80,
+    height: 80
   };
 
-  // Obstacle collision
-  obstacles.forEach((obs) => {
-    const obsBox = {
-      x: obs.lane * w + w / 2 - obs.width / 2,
-      y: obs.y,
-      width: obs.width,
-      height: obs.height,
-    };
-
-    if (rectsCollide(playerBox, obsBox)) alive = false;
+  obstacles.forEach(o => {
+    const box = { x: o.lane * w + w / 2 - o.width / 2, y: o.y, width: o.width, height: o.height };
+    if (rectsCollide(playerBox, box)) die();
   });
 
-  // Collectibles
   collectibles.forEach((c, i) => {
-    const cBox = {
-      x: c.lane * w + w / 2 - c.size / 2,
-      y: c.y,
-      width: c.size,
-      height: c.size,
-    };
-
-    if (rectsCollide(playerBox, cBox)) {
+    const box = { x: c.lane * w + w / 2 - c.size / 2, y: c.y, width: c.size, height: c.size };
+    if (rectsCollide(playerBox, box)) {
       score += c.value;
+      
+      scorePopUps.push({
+        x: c.lane * w + w / 2,
+        y: c.y,
+        value: c.value,
+        life: 0.6
+      });
+      
       collectibles.splice(i, 1);
     }
   });
 
-  // Lane attack death
-  if (
-    currentPhase === GamePhase.CHASE &&
-    dangerLanes.includes(player.lane)
-  ) {
-    alive = false;
+  if (phase === GamePhase.CHASE && dangerLanes.includes(player.lane)) die();
+}
+
+function die() {
+  alive = false;
+  shakeTimer = 0.3;
+}
+
+// ============= GLOW EFFECT =================
+export function glowRect(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  color: string,
+  blur = 20,
+) {
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = blur;
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, w, h);
+  ctx.restore();
+}
+
+// ============== LEADERBOARD =================
+async function submitScore(finalScore: number) {
+  if (scoreSubmitted)
+    return;
+
+  scoreSubmitted = true;
+
+  const { error } = await conn.from("leaderboard").insert([{
+    score: finalScore
+  }]);
+  
+  if (error) {
+    console.error("Error submitting score:", error);
+  } else {
+    await fetchLeaderboard();
   }
 }
 
-// ==================== DRAW ====================
-function drawObstacles() {
-  ctx.fillStyle = "#ff3b3b";
-  const w = laneWidth();
-
-  obstacles.forEach((obs) => {
-    const x = obs.lane * w + w / 2 - obs.width / 2;
-    ctx.fillRect(x, obs.y, obs.width, obs.height);
-  });
+async function fetchLeaderboard() {
+  const { data, error } = await conn
+    .from("leaderboard")
+    .select("score")
+    .order("score", { ascending: false })
+    .limit(10);
+  
+  if (error) {
+    console.error("Error fetching leaderboard:", error);
+  } else {
+    leaderboardData = data;
+  }
 }
 
-function drawCollectibles() {
-  ctx.fillStyle = "#ffd93d";
-  const w = laneWidth();
+/* ==================== DRAW ==================== */
+function drawWorld() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  collectibles.forEach((c) => {
-    const x = c.lane * w + w / 2 - c.size / 2;
-    ctx.beginPath();
-    ctx.arc(x + c.size / 2, c.y + c.size / 2, c.size / 2, 0, Math.PI * 2);
-    ctx.fill();
+  let sx = 0, sy = 0;
+  if (shakeTimer > 0) {
+    sx = (Math.random() - 0.5) * 10;
+    sy = (Math.random() - 0.5) * 10;
+    shakeTimer -= 1 / 60;
+  }
+
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  drawLanes(ctx, canvas.width, canvas.height);
+  obstacles.forEach(o => glowRect(
+    o.lane * laneWidth() + laneWidth() / 2 - o.width / 2,
+    o.y,
+    o.width,
+    o.height,
+    "#ff3b3b",
+    20
+  ));
+  
+  collectibles.forEach(c => glowRect(
+    c.lane * laneWidth() + laneWidth() / 2 - c.size / 2,
+    c.y,
+    c.size,
+    c.size,
+    "#ffd93d",
+    20
+  ));
+
+  drawPlayer(ctx, canvas.width, canvas.height, player.lane, LANES);
+
+  scorePopUps.forEach(p => {
+  ctx.globalAlpha = Math.max(p.life / 0.6, 0);
+    ctx.fillStyle = p.value >= 800 ? "#ffd93d" : "#ffffff";
+    ctx.font = "20px Arial";
+    ctx.fillText(`+${p.value}`, p.x - 12, p.y);
+    ctx.globalAlpha = 1;
   });
+
+  if (phase === GamePhase.CHASE) {
+    drawPhoenix();
+    drawLaneAttacks();
+  }
+
+  ctx.restore();
+  
+  // Draw flashbang blind effect (outside of shake transform)
+  if (blindTimer > 0) {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
 }
 
 function drawPhoenix() {
-  const w = laneWidth();
-  const x = phoenix.lane * w + w / 2 - 20;
-  const y = canvas.height - phoenix.yOffset;
-
-  ctx.fillStyle = phoenixHitTimer > 0 ? "#ffd93d" : "#ff7a18";
-  ctx.fillRect(x, y, 40, 80);
+  const phoenixColor = phoenixHitTimer > 0 ? "#ffd93d" : "#ff7a18";
+  glowRect(
+    phoenix.lane * laneWidth() + laneWidth() / 2 - 20,
+    canvas.height - phoenix.offsetY,
+    40, 80,
+    phoenixColor,
+    25
+  );
 }
 
 function drawLaneAttacks() {
-  const w = laneWidth();
-
-  // Warning lanes
-  ctx.fillStyle = "rgba(255, 140, 0, 0.35)";
-  warningLanes.forEach((lane) => {
-    ctx.fillRect(lane * w, 0, w, canvas.height);
-  });
-
-  // Danger lanes
-  ctx.fillStyle = "rgba(255, 60, 60, 0.55)";
-  dangerLanes.forEach((lane) => {
-    ctx.fillRect(lane * w, 0, w, canvas.height);
-  });
+  ctx.fillStyle = "rgba(255,140,0,0.35)";
+  warningLanes.forEach(l => ctx.fillRect(l * laneWidth(), 0, laneWidth(), canvas.height));
+  ctx.fillStyle = "rgba(255,60,60,0.55)";
+  dangerLanes.forEach(l => ctx.fillRect(l * laneWidth(), 0, laneWidth(), canvas.height));
 }
 
-// =================FIRING=======================
-function fireShockBolt(charge: number) {
-  const isCharged = charge >= TAP_THRESHOLD;
-
-  if(isCharged) {
-    score += 800;
-  }
-  else {
-    score += 300;
-  }
-
-  phoenixHitTimer = 0.15;
-}
-
-// ==================== KEYS ====================
-window.addEventListener("keydown", (e) => {
+/* ==================== INPUT ==================== */
+window.addEventListener("keydown", e => {
   if (!alive) return;
-
   if (e.key === "a" || e.key === "ArrowLeft") player.moveLeft();
   if (e.key === "d" || e.key === "ArrowRight") player.moveRight();
-});
-
-window.addEventListener("keydown", (e) => {
-  if (!alive || currentPhase !== GamePhase.CHASE) return;
-
-  if (e.code === "Space" && attackCooldown <= 0 && !isCharging) {
+  if (e.code === "Space" && phase === GamePhase.CHASE && attackCooldown <= 0 && !isCharging) {
     isCharging = true;
     chargeTime = 0;
   }
 });
 
-window.addEventListener("keyup", (e) => {
-  if (!alive || currentPhase !== GamePhase.CHASE) return;
-
+window.addEventListener("keyup", e => {
   if (e.code === "Space" && isCharging) {
     fireShockBolt(chargeTime);
     isCharging = false;
-    chargeTime = 0;
     attackCooldown = ATTACK_COOLDOWN;
   }
 });
 
-// ==================== GAME LOOP ====================
-function gameLoop(timestamp: number) {
-  const delta = (timestamp - lastTime) / 1000;
-  lastTime = timestamp;
+window.addEventListener("keydown", e => {
+  if (e.key === "r" && !alive) reset();
+});
+
+/* ==================== RESET ==================== */
+function reset() {
+  alive = true;
+  score = 0;
+  speed = 300;
+  phase = GamePhase.RUNNER;
+  obstacles.length = 0;
+  collectibles.length = 0;
+  warningLanes = [];
+  dangerLanes = [];
+  isCharging = false;
+  chargeTime = 0;
+  attackCooldown = phoenixHitTimer = 0;
+  blindTimer = blindCooldown = shakeTimer = 0;
+  scoreSubmitted = false;
+  leaderboardData = null;
+}
+
+/* ==================== LOOP ==================== */
+function loop(t: number) {
+  const dt = (t - lastTime) / 1000;
+  lastTime = t;
 
   if (alive) {
-    speed += delta * 20;
-    score += delta * 100;
+    speed += dt * 20;
+    score += dt * 100;
   }
 
-  // Phase switch
-  if (currentPhase === GamePhase.RUNNER && score >= 10000) {
-    currentPhase = GamePhase.CHASE;
-    obstacles.length = 0;
-    collectibles.length = 0;
+  if (phase === GamePhase.RUNNER && score >= PHASE_2_SCORE) {
+    phase = GamePhase.CHASE;
+    obstacles.length = collectibles.length = 0;
   }
 
-  // Phase logic
-  if (alive && currentPhase === GamePhase.RUNNER) {
-    obstacleSpawnInterval = Math.max(0.6, 1 - score / 20000);
-
-    obstacleSpawnTimer += delta;
-    if (obstacleSpawnTimer > obstacleSpawnInterval) {
+  if (alive && phase === GamePhase.RUNNER) {
+    obstacleInterval = Math.max(0.6, 1 - score / 20000);
+    obstacleTimer += dt;
+    if (obstacleTimer > obstacleInterval) {
       spawnObstacle();
-      obstacleSpawnTimer = 0;
+      obstacleTimer = 0;
     }
-
-    collectibleTimer += delta;
+    collectibleTimer += dt;
     if (collectibleTimer > 1.5) {
       spawnCollectible();
       collectibleTimer = 0;
     }
 
-    updateObstacles(delta);
-    updateCollectibles(delta);
+    for (let i = scorePopUps.length - 1; i >= 0; i--) {
+      scorePopUps[i].y -= 40 * dt;
+      scorePopUps[i].life -= dt;
+      if (scorePopUps[i].life <= 0) scorePopUps.splice(i, 1);
+    }
+
+    updateObstacles(dt);
+    updateCollectibles(dt);
     checkCollisions();
   }
 
-  if (alive && currentPhase === GamePhase.CHASE) {
-    if (isCharging) {
-      chargeTime += delta;
-      chargeTime = Math.min(chargeTime, MAX_CHARGE);
-    }
-    
-    if (attackCooldown > 0) {
-      attackCooldown -= delta;
-    }
-
-    if (phoenixHitTimer > 0) {
-      phoenixHitTimer -= delta;
-    }
-   
+  if (alive && phase === GamePhase.CHASE) {
     phoenix.lane = player.lane;
-    updateLaneAttack(delta);
+    updateLaneAttacks(dt);
     checkCollisions();
+    if (attackCooldown > 0) attackCooldown -= dt;
+    if (phoenixHitTimer > 0) phoenixHitTimer -= dt;
+    
+    // Phoenix Blind Logic
+    if (blindTimer > 0) {
+      blindTimer -= dt;
+    }
+    if (blindCooldown > 0) {
+      blindCooldown -= dt;
+    } else {
+      // Trigger blind every 6 seconds
+      blindTimer = 0.6; // 0.6 second blind duration
+      blindCooldown = 6; // 6 second cooldown
+    }
+
   }
 
-  // Draw
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  drawLanes(ctx, canvas.width, canvas.height);
-  drawObstacles();
-  drawCollectibles();
-  drawPlayer(ctx, canvas.width, canvas.height, player.lane, LANES);
-
-  if (isCharging) {
-    ctx.strokeStyle = "rgba(255,255,255,0.6)";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(
-      player.lane * laneWidth() + laneWidth() / 2 - 22,
-      canvas.height - 122,
-      44,
-      84
-    );
-  }
-
-  if (currentPhase === GamePhase.CHASE) {
-    drawPhoenix();
-    drawLaneAttacks();
-    ctx.fillStyle = "#ff7a18";
-    ctx.fillText("CHASE MODE", 20, 20);
-  }
+  drawWorld();
 
   ctx.fillStyle = "white";
   ctx.font = "20px Arial";
-  ctx.fillText(`Score: ${Math.floor(score)}`, 20, 50);
+  ctx.fillText(`Score: ${Math.floor(score)}`, 20, 40);
 
   if (!alive) {
+    submitScore(Math.floor(score));
+    
     ctx.font = "48px Arial";
-    ctx.fillText("GAME OVER", canvas.width / 2 - 150, canvas.height / 2);
+    ctx.fillText("GAME OVER", canvas.width / 2 - 150, canvas.height / 2 - 100);
+    ctx.font = "24px Arial";
+    ctx.fillText(`Final Score: ${Math.floor(score)}`, canvas.width / 2 - 150, canvas.height / 2 - 50);
+    
+    // Display leaderboard
+    if (leaderboardData) {
+      ctx.font = "20px Arial";
+      ctx.fillText("TOP 10 SCORES", canvas.width / 2 - 80, canvas.height / 2 + 10);
+      leaderboardData.forEach((entry, i) => {
+        ctx.fillText(`${i + 1}. ${entry.score}`, canvas.width / 2 - 80, canvas.height / 2 + 40 + i * 25);
+      });
+    }
+    
+    ctx.font = "24px Arial";
+    ctx.fillText("Press R to Restart", canvas.width / 2 - 150, canvas.height / 2 + 320);
   }
 
-  requestAnimationFrame(gameLoop);
+  requestAnimationFrame(loop);
 }
 
-requestAnimationFrame(gameLoop);
+requestAnimationFrame(loop);

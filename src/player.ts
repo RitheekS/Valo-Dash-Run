@@ -1,3 +1,5 @@
+import { glowRect } from "./game";
+
 export class Player {
   lane = 1;
 
@@ -25,6 +27,6 @@ export function drawPlayer(
   const x = lane * laneWidth + laneWidth / 2 - 20;
   const y = canvasHeight - 100;
 
-  ctx.fillStyle = "#3fa9f5";
+  glowRect(x, y, 40, 80, "#3fa9f5", 25);
   ctx.fillRect(x, y, 40, 80);
 }

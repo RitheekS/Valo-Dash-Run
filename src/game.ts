@@ -16,7 +16,6 @@ const LANES = 4;
 const PHASE_2_SCORE = 10000;
 
 const TAP_THRESHOLD = 0.25;
-const MAX_CHARGE = 0.6;
 const ATTACK_COOLDOWN = 0.4;
 
 /* ==================== STATE ==================== */
@@ -29,6 +28,10 @@ let lastTime = 0;
 let speed = 300;
 let score = 0;
 let alive = true;
+let gameStarted = false;
+
+/* Tutorial Overlay */
+const tutorialOverlay = document.getElementById("tutorial-overlay") as HTMLElement;
 
 /* Shock Bolt */
 let isCharging = false;
@@ -67,10 +70,10 @@ let attackState: "WARNING" | "DANGER" = "WARNING";
 
 /* Score PopUp */
 type ScorePopUp = {
-    x: number;
-    y: number;
-    value: number;
-    life: number;
+  x: number;
+  y: number;
+  value: number;
+  life: number;
 };
 const scorePopUps: ScorePopUp[] = [];
 
@@ -130,7 +133,7 @@ function updateLaneAttacks(dt: number) {
     dangerLanes = [];
     attackState = "WARNING";
     attackTimer = 0;
-    
+
     while (warningLanes.length < (Math.random() > 0.6 ? 2 : 1)) {
       const l = Math.floor(Math.random() * LANES);
       if (!warningLanes.includes(l)) warningLanes.push(l);
@@ -163,14 +166,14 @@ function checkCollisions() {
     const box = { x: c.lane * w + w / 2 - c.size / 2, y: c.y, width: c.size, height: c.size };
     if (rectsCollide(playerBox, box)) {
       score += c.value;
-      
+
       scorePopUps.push({
         x: c.lane * w + w / 2,
         y: c.y,
         value: c.value,
         life: 0.6
       });
-      
+
       collectibles.splice(i, 1);
     }
   });
@@ -210,7 +213,7 @@ async function submitScore(finalScore: number) {
   const { error } = await conn.from("leaderboard").insert([{
     score: finalScore
   }]);
-  
+
   if (error) {
     console.error("Error submitting score:", error);
   } else {
@@ -224,7 +227,7 @@ async function fetchLeaderboard() {
     .select("score")
     .order("score", { ascending: false })
     .limit(10);
-  
+
   if (error) {
     console.error("Error fetching leaderboard:", error);
   } else {
@@ -255,7 +258,7 @@ function drawWorld() {
     "#ff3b3b",
     20
   ));
-  
+
   collectibles.forEach(c => glowRect(
     c.lane * laneWidth() + laneWidth() / 2 - c.size / 2,
     c.y,
@@ -268,7 +271,7 @@ function drawWorld() {
   drawPlayer(ctx, canvas.width, canvas.height, player.lane, LANES);
 
   scorePopUps.forEach(p => {
-  ctx.globalAlpha = Math.max(p.life / 0.6, 0);
+    ctx.globalAlpha = Math.max(p.life / 0.6, 0);
     ctx.fillStyle = p.value >= 800 ? "#ffd93d" : "#ffffff";
     ctx.font = "20px Arial";
     ctx.fillText(`+${p.value}`, p.x - 12, p.y);
@@ -281,7 +284,7 @@ function drawWorld() {
   }
 
   ctx.restore();
-  
+
   // Draw flashbang blind effect (outside of shake transform)
   if (blindTimer > 0) {
     ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
@@ -309,7 +312,15 @@ function drawLaneAttacks() {
 
 /* ==================== INPUT ==================== */
 window.addEventListener("keydown", e => {
-  if (!alive) return;
+  // Start game with 'S' key
+  if (!gameStarted && (e.key === "s" || e.key === "S")) {
+    gameStarted = true;
+    tutorialOverlay.style.display = "none";
+    lastTime = performance.now();
+    return;
+  }
+
+  if (!gameStarted || !alive) return;
   if (e.key === "a" || e.key === "ArrowLeft") player.moveLeft();
   if (e.key === "d" || e.key === "ArrowRight") player.moveRight();
   if (e.code === "Space" && phase === GamePhase.CHASE && attackCooldown <= 0 && !isCharging) {
@@ -319,6 +330,7 @@ window.addEventListener("keydown", e => {
 });
 
 window.addEventListener("keyup", e => {
+  if (!gameStarted) return;
   if (e.code === "Space" && isCharging) {
     fireShockBolt(chargeTime);
     isCharging = false;
@@ -346,10 +358,17 @@ function reset() {
   blindTimer = blindCooldown = shakeTimer = 0;
   scoreSubmitted = false;
   leaderboardData = null;
+  gameStarted = false;
+  tutorialOverlay.style.display = "flex";
 }
 
 /* ==================== LOOP ==================== */
 function loop(t: number) {
+  if (!gameStarted) {
+    requestAnimationFrame(loop);
+    return;
+  }
+
   const dt = (t - lastTime) / 1000;
   lastTime = t;
 
@@ -393,7 +412,7 @@ function loop(t: number) {
     checkCollisions();
     if (attackCooldown > 0) attackCooldown -= dt;
     if (phoenixHitTimer > 0) phoenixHitTimer -= dt;
-    
+
     // Phoenix Blind Logic
     if (blindTimer > 0) {
       blindTimer -= dt;
@@ -416,12 +435,12 @@ function loop(t: number) {
 
   if (!alive) {
     submitScore(Math.floor(score));
-    
+
     ctx.font = "48px Arial";
     ctx.fillText("GAME OVER", canvas.width / 2 - 150, canvas.height / 2 - 100);
     ctx.font = "24px Arial";
     ctx.fillText(`Final Score: ${Math.floor(score)}`, canvas.width / 2 - 150, canvas.height / 2 - 50);
-    
+
     // Display leaderboard
     if (leaderboardData) {
       ctx.font = "20px Arial";
@@ -430,7 +449,7 @@ function loop(t: number) {
         ctx.fillText(`${i + 1}. ${entry.score}`, canvas.width / 2 - 80, canvas.height / 2 + 40 + i * 25);
       });
     }
-    
+
     ctx.font = "24px Arial";
     ctx.fillText("Press R to Restart", canvas.width / 2 - 150, canvas.height / 2 + 320);
   }

@@ -1,11 +1,29 @@
 <!DOCTYPE html>
 <html lang="en">
-    <head>
-        <title>Valorant Dash Run</title>
-        <link rel="stylesheet" href="htmlstyling.css">
-    </head>
-    <body>
-        <canvas id="game"></canvas>
-        <script type="module" src="/src/game.ts"></script>
-    </body>
+
+<head>
+    <title>Valorant Dash Run</title>
+    <link rel="stylesheet" href="htmlstyling.css">
+</head>
+
+<body>
+    <div id="tutorial-overlay">
+        <div class="tutorial-content">
+            <h1>VALO DASH RUN</h1>
+            <div class="instructions">
+                <p>Press <span class="key">A/D or left/right key</span></span> to move.</p>
+                <p>Collect coins to earn points faster.</p>
+                <p>Avoid the red obstacles.</p><br>
+                <P><b><u>Once reached 10,000 points</u></b></P>
+                <p>Press <span class="key">SPACE</span> to attack.</p>
+                <p>Avoid the red lanes.</p>
+                <p>There will be flashbangs.</p>
+            </div>
+            <p class="start-hint">Press <span class="key">S</span> to Start</p>
+        </div>
+    </div>
+    <canvas id="game"></canvas>
+    <script type="module" src="/src/game.ts"></script>
+</body>
+
 </html>

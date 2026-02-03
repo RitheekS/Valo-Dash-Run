@@ -4,6 +4,7 @@ import { Player } from "./player";
 import { Obstacle } from "./Obstacle";
 import { Collectible } from "./collectibles";
 import conn from "../db/supabase-config";
+import { SoundManager } from "./audioManager";
 
 /* ==================== SETUP ==================== */
 const canvas = document.getElementById("game") as HTMLCanvasElement;
@@ -80,6 +81,9 @@ const scorePopUps: ScorePopUp[] = [];
 /* Phoenix */
 const phoenix = { lane: 1, offsetY: 340 };
 
+/* Sound Manager */
+const soundManager = new SoundManager();
+
 /* ==================== HELPERS ==================== */
 const laneWidth = () => canvas.width / LANES;
 
@@ -127,6 +131,7 @@ function updateLaneAttacks(dt: number) {
     attackTimer = 0;
     shakeTimer = 0.15;
     ctx.fillStyle = `rgba(244, 140, 0, ${pulse})`;
+    soundManager.playSound('redLanes');
   }
 
   if (attackState === "DANGER" && attackTimer > 0.4) {
@@ -145,6 +150,7 @@ function updateLaneAttacks(dt: number) {
 function fireShockBolt(charge: number) {
   score += charge >= TAP_THRESHOLD ? 800 : 300;
   phoenixHitTimer = charge >= TAP_THRESHOLD ? 0.25 : 0.15;
+  soundManager.playSound('playerAttack');
 }
 
 /* ==================== COLLISIONS ==================== */
@@ -159,7 +165,10 @@ function checkCollisions() {
 
   obstacles.forEach(o => {
     const box = { x: o.lane * w + w / 2 - o.width / 2, y: o.y, width: o.width, height: o.height };
-    if (rectsCollide(playerBox, box)) die();
+    if (rectsCollide(playerBox, box)) {
+      soundManager.playSound('obstacleHit');
+      die();
+    }
   });
 
   collectibles.forEach((c, i) => {
@@ -174,11 +183,15 @@ function checkCollisions() {
         life: 0.6
       });
 
+      soundManager.playSound('collectCoin');
       collectibles.splice(i, 1);
     }
   });
 
-  if (phase === GamePhase.CHASE && dangerLanes.includes(player.lane)) die();
+  if (phase === GamePhase.CHASE && dangerLanes.includes(player.lane)) {
+    soundManager.playSound('killedByEnemy');
+    die();
+  }
 }
 
 function die() {
@@ -316,6 +329,7 @@ window.addEventListener("keydown", e => {
   if (!gameStarted && (e.key === "s" || e.key === "S")) {
     gameStarted = true;
     tutorialOverlay.style.display = "none";
+    soundManager.playBGM('phase1BGM');
     lastTime = performance.now();
     return;
   }
@@ -360,6 +374,7 @@ function reset() {
   leaderboardData = null;
   gameStarted = false;
   tutorialOverlay.style.display = "flex";
+  soundManager.stopAll(); // Stop all sounds on reset
 }
 
 /* ==================== LOOP ==================== */
@@ -380,6 +395,7 @@ function loop(t: number) {
   if (phase === GamePhase.RUNNER && score >= PHASE_2_SCORE) {
     phase = GamePhase.CHASE;
     obstacles.length = collectibles.length = 0;
+    soundManager.playBGM('phase2BGM');
   }
 
   if (alive && phase === GamePhase.RUNNER) {
@@ -423,6 +439,7 @@ function loop(t: number) {
       // Trigger blind every 6 seconds
       blindTimer = 0.6; // 0.6 second blind duration
       blindCooldown = 6; // 6 second cooldown
+      soundManager.playSound('flashbang');
     }
 
   }
